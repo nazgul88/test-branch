@@ -32,9 +32,7 @@ jobs:
   automerge:
     runs-on: ubuntu-latest
     steps:
-      - name: Auto-Merge Pull Request
-        uses: reitermarkus/automerge@v1.5.2
+      - uses: reitermarkus/automerge@v1.5.2
         with:
           token: ${{ secrets.TOKEN }}
           pull-request: ${{ github.event.inputs.pull-request }}
-          #dry-run: true
