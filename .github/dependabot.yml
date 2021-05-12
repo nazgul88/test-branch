@@ -1,0 +1,10 @@
+version: 2
+updates:
+  - package-ecosystem: "gitsubmodule"
+    directory: "/"
+    schedule:
+      interval: "daily"
+      # Check for gitsubmodule updates at 11am CST
+      time: "11:20"
+      timezone: "America/Chicago"
+    open-pull-requests-limit: 10
