@@ -1,24 +1,43 @@
-name: "Dependabot Automerge - Action"
+name: Automerge
+
 on:
-  pull_request:
+  # Try enabling auto-merge for all open pull requests. (Only recommended for testing.)
+  push:
+
+  # Try enabling auto-merge for all open pull requests.
+  schedule:
+    - cron: 0 * * * *
+
+  # Try enabling auto-merge for a pull request when a draft is marked as “ready for review”, when
+  # a required label is applied or when a “do not merge” label is removed, or when a pull request
+  # is updated in any way (opened, synchronized, reopened, edited).
+  pull_request_target:
+    types:
+      - opened
+      - synchronized
+      - reopened
+      - edited
+      - labeled
+      - unlabeled
+      - ready_for_review
+
+  # Try enabling auto-merge for the specified pull request or all open pull requests if none is specified.
+  workflow_dispatch:
+    inputs:
+      pull-request:
+        description: Pull Request Number
+        required: false
+
 jobs:
-  worker:
+  automerge:
     runs-on: ubuntu-latest
-    if: github.actor == 'dependabot[bot]'
     steps:
-      - name: automerge
-        uses: actions/github-script@0.2.0
+      - uses: reitermarkus/automerge@v2
         with:
-          script: |
-            github.pullRequests.createReview({
-              owner: context.payload.repository.owner.login,
-              repo: context.payload.repository.name,
-              pull_number: context.payload.pull_request.number,
-              event: 'APPROVE'
-            })
-            github.pullRequests.merge({
-              owner: context.payload.repository.owner.login,
-              repo: context.payload.repository.name,
-              pull_number: context.payload.pull_request.number
-            })
-          github-token: ${{github.token}}
+          token: ${{ secrets.MY_GITHUB_TOKEN }}
+          merge-method: rebase
+          do-not-merge-labels: never-merge
+          required-labels: automerge
+          pull-request: ${{ github.event.inputs.pull-request }}
+          dry-run: true
+
