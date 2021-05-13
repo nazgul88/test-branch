@@ -8,6 +8,6 @@ updates:
       time: "11:20"
       timezone: "America/Chicago"
       reviewers:
-       - "dependabot"
+        - "dependabot"
 #       - "abaigabylov"
     open-pull-requests-limit: 10
