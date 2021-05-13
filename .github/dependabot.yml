@@ -7,7 +7,7 @@ updates:
       # Check for gitsubmodule updates at 11am CST
       time: "11:20"
       timezone: "America/Chicago"
-      reviewers:
-        - "dependabot"
+    reviewers:
+       - "dependabot"
 #       - "abaigabylov"
     open-pull-requests-limit: 10
