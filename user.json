@@ -1,0 +1,17 @@
+[
+    {
+        "username": "anakin",
+        "user_group": "test_group",
+        "requested_by": "nazka123"
+    },
+    {
+        "username": "luke",
+        "user_group": "test_group",
+        "requested_by": "nazka123"
+    },
+    {
+        "username": "leia",
+        "user_group": "test_group",
+        "requested_by": "nazka123"
+    }
+]
