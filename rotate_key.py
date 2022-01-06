@@ -35,7 +35,9 @@ def deactivate_access_key(username: str, access_key_id: str) -> None:
     iam().update_access_key(
         UserName=username,
         AccessKeyId=access_key_id,
-def delete_access_key():
+        Status='Inactive')
+
+# def delete_access_key():
 #     pass
 
 def create_access_key(username: str) -> Tuple[str, str]:
@@ -55,12 +57,9 @@ def rotate_keys() -> None:
         username = secret['Name']
         if (datetime.now(timezone.utc) - last_changed_at).days >= ROTATE_AFTER:
             deactivate_access_key(username, secret['access_key_id']) # TODO: delete rigth away. https://boto3.amazonaws.com/v1/documentation/api/latest/reference/services/iam.html#IAM.Client.list_access_keys
-            secret_key, access_key = create_access_key(username) #boto3 does not give last changed/inactivated status 
+            secret_key, access_key = create_access_key(username) #boto3 does not give last changed/inactivated
             create_secret(username, secret_key, access_key)
 
 
 if __name__ == '__main__':
     rotate_keys()
-        Status='Inactive')
-
-# 
