@@ -1,0 +1,285 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: ALLFANS RDS MYSQL Instance
+
+Parameters:
+  ClientPrefix:
+    Description: "Client AWS Prefix"
+    Type: String
+    Default: ALLFANS
+
+  EnvironmentSuffix:
+    Description: "Environment Suffix (PROD, STAGE)"
+    Type: String
+    Default: PROD
+    AllowedValues:
+    - PROD
+    - STAGE
+    - DEV
+
+  VPCStackName:
+    Description: "CloudFormation VPC Stack Name"
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+    Default: "RootVPC"
+    AllowedValues:
+    - RootVPC
+
+  NetworkStackName:
+    Description: "CloudFormation Network Envrionment  Stack Name"
+    Type: String
+    MinLength: 1
+    MaxLength: 255
+    AllowedPattern: "^[a-zA-Z][-a-zA-Z0-9]*$"
+    Default: "ProdSubnets"
+    AllowedValues:
+    - ProdSubnets
+
+  EbsOpt:
+    Description: "EBS Optimized? (true,false)"
+    Type: String
+    Default: true
+    AllowedValues:
+    - true
+    - false
+
+
+  DBUsername:
+    Description: "The database admin account username"
+    Type: String
+    MinLength: '1'
+    MaxLength: '16'
+    AllowedPattern: '[a-zA-Z][a-zA-Z0-9]*'
+    ConstraintDescription: must begin with a letter and contain only alphanumeric characters.
+    Default: admin
+
+  DBPassword:
+    Description: "The database admin account password"
+    Type: String
+    MinLength: '8'
+    MaxLength: '41'
+    AllowedPattern: '[a-zA-Z0-9]*'
+    ConstraintDescription: must contain only alphanumeric characters.
+    NoEcho: 'true'
+
+  DBInstanceType:
+    Description: "The database instance type"
+    Type: String
+    Default: db.r5.large
+    AllowedValues:
+    - db.t3.small 
+    - db.t3.medium 
+    - db.r5.large 
+    - db.r5.xlarge 
+    ConstraintDescription: must select a valid database instance type.
+
+  DBStorageEncrypted:
+    Description: "A value that indicates whether the DB instance is encrypted"
+    Type: String
+    Default: true
+    AllowedValues:
+    - true
+    - false
+
+  DBDeletionProtection:
+    Type: String
+    Default: true
+    AllowedValues:
+    - true
+    - false
+
+  DBBackupRetentionPeriod:
+    Description: "The number of days for which automated backups are retained. Setting this parameter to a positive number enables backups. Setting this parameter to 0 disables automated backups"
+    Type: Number
+    Default: 15
+    AllowedValues:
+    - 15
+    - 30
+
+  EnablePerformanceInsights:
+    Description: "A value that indicates whether to enable Performance Insights for the DB instance."
+    Type: String
+    Default: false
+    AllowedValues:
+    - true
+    - false
+
+  PerformanceInsightsRetentionPeriod:
+    Description: "The amount of time, in days, to retain Performance Insights data. Valid values are 7 or 731 (2 years)."
+    Type: String
+    Default: 7
+    AllowedValues:
+    - 7
+    - 731
+
+  EnableEnhancedMonitoring:
+    Description: "Provide metrics in real time for the operating system (OS) that your DB instance runs on."
+    Type: String
+    AllowedValues: [true, false]
+    Default: false
+
+  MonitoringInterval:
+    Description: "The interval, in seconds, between points when Enhanced Monitoring metrics are collected for the DB instance. To disable collecting Enhanced Monitoring metrics, specify 0. The default is 0."
+    Type: String
+    Default: 60
+    AllowedValues:
+    - 60
+    - 30
+    - 15
+    - 10
+    - 5
+    - 1
+    - 0
+
+Conditions:
+  HasEnhancedMonitoring: !Equals [ !Ref EnableEnhancedMonitoring, 'true' ]
+  HasEnablePerformanceInsights: !Equals [ !Ref EnablePerformanceInsights, 'true' ]
+
+Resources:
+  EnhancedMonitoringRole:
+    Condition: HasEnhancedMonitoring
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/service-role/AmazonRDSEnhancedMonitoringRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Sid: ''
+          Effect: Allow
+          Principal:
+            Service: monitoring.rds.amazonaws.com
+          Action: sts:AssumeRole
+      Path: "/"
+
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: DB Subnet Group
+      SubnetIds:
+      - Fn::ImportValue:
+          !Sub "${NetworkStackName}-App-Subnet-AZ1"
+      - Fn::ImportValue:
+          !Sub "${NetworkStackName}-App-Subnet-AZ2"
+      Tags:
+      - Key: Name
+        Value: !Join ['',[Ref: ClientPrefix,'DB Subnet Group-',Ref: EnvironmentSuffix]]
+      - Key: Environment
+        Value:
+          Ref: EnvironmentSuffix
+
+
+  RDSDBClusterParameterGroup:
+    Type: AWS::RDS::DBClusterParameterGroup
+    Properties:
+      Description:  Aurora Cluster Parameter Group
+      Family: aurora-mysql5.7
+      Parameters:
+        innodb_file_per_table: '1'
+
+  RDSDBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      Description:  Aurora Parameter Group
+      Family: aurora-mysql5.7
+
+
+  RDSCluster:
+    Type: AWS::RDS::DBCluster
+    Properties:
+      DBClusterIdentifier: !Join [ '', [Ref: ClientPrefix, Ref:  EnvironmentSuffix, 'rds' ] ]
+      MasterUsername: 
+        Ref: DBUsername
+      MasterUserPassword: 
+        Ref: DBPassword
+      DBSubnetGroupName:
+        Ref: DBSubnetGroup
+      DBClusterParameterGroupName:
+        Ref: RDSDBClusterParameterGroup
+      Engine: aurora-mysql
+      EngineVersion: 5.7.mysql_aurora.2.07.2
+      VpcSecurityGroupIds:
+      - Fn::ImportValue:
+          !Sub "${NetworkStackName}-DB-SG"
+      PreferredBackupWindow: 9:00-10:00
+      PreferredMaintenanceWindow: Sat:12:00-Sat:13:00
+      BackupRetentionPeriod: 
+        Ref: DBBackupRetentionPeriod
+      StorageEncrypted:
+        Ref: DBStorageEncrypted
+      Tags:
+      - Key: Name
+        Value: !Join [ '', [Ref: ClientPrefix, '-', Ref:  EnvironmentSuffix, '-', 'rds' ] ]
+      - Key: Environment
+        Value:
+          Ref: EnvironmentSuffix
+
+  RDSDBInstance1:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Join [ '', [Ref: ClientPrefix, '-', Ref:  EnvironmentSuffix, '-', 'rds-01' ] ]
+      DBSubnetGroupName:
+        Ref: DBSubnetGroup
+      DBParameterGroupName:
+        Ref: RDSDBParameterGroup
+      Engine: aurora-mysql
+      EngineVersion: 5.7.mysql_aurora.2.07.2
+      DBClusterIdentifier:
+        Ref: RDSCluster
+      PubliclyAccessible: 'false'
+      AvailabilityZone:
+        Fn::Select:
+          - 1
+          - Fn::GetAZs: ""
+      DBInstanceClass:
+        Ref: DBInstanceType
+      AutoMinorVersionUpgrade: 'true'
+      EnablePerformanceInsights:
+        Ref: EnablePerformanceInsights
+      MonitoringInterval: !If [HasEnhancedMonitoring, 60, 0]
+      MonitoringRoleArn: !If [HasEnhancedMonitoring, !GetAtt ['EnhancedMonitoringRole', 'Arn'], !Ref 'AWS::NoValue']
+
+
+
+  RDSDBInstance2:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: !Join [ '', [Ref: ClientPrefix, '-', Ref:  EnvironmentSuffix, '-', 'rds-02' ] ]
+      DBSubnetGroupName:
+        Ref: DBSubnetGroup
+      DBParameterGroupName:
+        Ref: RDSDBParameterGroup
+      Engine: aurora-mysql
+      EngineVersion: 5.7.mysql_aurora.2.07.2
+      DBClusterIdentifier:
+        Ref: RDSCluster
+      PubliclyAccessible: 'false'
+      AvailabilityZone:
+        Fn::Select:
+            - 0
+            - Fn::GetAZs: ""
+      DBInstanceClass:
+        Ref: DBInstanceType
+      AutoMinorVersionUpgrade: 'true'
+      EnablePerformanceInsights:
+        Ref: EnablePerformanceInsights
+      MonitoringInterval: !If [HasEnhancedMonitoring, 60, 0]
+      MonitoringRoleArn: !If [HasEnhancedMonitoring, !GetAtt ['EnhancedMonitoringRole', 'Arn'], !Ref 'AWS::NoValue']
+
+
+
+Outputs:
+
+  RDSCluster:
+    Description: DB
+    Value:
+      Ref: RDSCluster
+
+  DBEndpoint:
+    Description: DB RDS Endpoint
+    Value:
+      Fn::GetAtt:
+      - RDSCluster
+      - Endpoint.Address
