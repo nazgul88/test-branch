@@ -1,0 +1,149 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: "AWS Fundamentals"
+
+Parameters:
+  KeyName:
+    Description: "Name of an existing EC2 KeyPair to enable SSH access to the instance"
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: us-west-2
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair.
+
+  AWSInstanceType:
+    Description: "EC2 Instance Type"
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+  VpcId:
+    Description: "VPC ID"
+    Type: String
+    Default: vpc-69771811
+
+  PublicSubnetAZ1: 
+    Description: "VPC ID"
+    Type: String
+    Default: subnet-7b9d6503
+
+  LatestUbuntuAmiId:
+    Type: 'AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>'
+    Default: "/aws/service/canonical/ubuntu/server/20.04/stable/current/amd64/hvm/ebs-gp2/ami-id"
+
+Resources:
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ec2.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Policies:
+        -
+          PolicyName: "CloudWatchPublish"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              -
+                Effect: "Allow"
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: "arn:aws:logs:*:*:*"
+
+  InstanceProfileRole:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: "/"
+      Roles:
+      - !Ref InstanceRole
+
+  AWSInstaceAZ1:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref AWSInstanceType
+      IamInstanceProfile: !Ref InstanceProfileRole
+      KeyName:  !Ref KeyName
+      ImageId: !Ref LatestUbuntuAmiId
+      DisableApiTermination: 'false'
+      BlockDeviceMappings:
+      - DeviceName: "/dev/sda1"
+        Ebs:
+          VolumeType: gp3
+          DeleteOnTermination: 'true'
+          VolumeSize: '10'
+          Encrypted: 'false'
+      - DeviceName: "/dev/sdb"
+        Ebs:
+          VolumeType: gp3
+          DeleteOnTermination: 'true'
+          VolumeSize: '1'
+          Encrypted: 'false'
+      NetworkInterfaces:
+      - DeleteOnTermination: true
+        Description: Main interface
+        DeviceIndex: '0'
+        GroupSet:
+        - !Ref AWSSecurityGroup
+        SubnetId: !Ref PublicSubnetAZ1
+      Tags:
+      - Key: Name
+        Value:  AWSDEMO
+      UserData:
+        Fn::Base64: !Sub |
+            #!/bin/bash            
+            apt-get update
+            apt update -y
+            apt install apache2 -y 
+            systemctl start apache2 
+            systemctl enable apache2
+            mkfs -t ext4 /dev/xvdb 
+            #add an entry to fstab to mount volume during boot 
+            echo "/dev/xvdb /var/www/html  ext4 defaults  0 0 " >> /etc/fstab
+            mount /dev/xvdb /var/www/html
+            cd /var/www/html
+            echo "<html><h1> Hello AWS World </h1></html>" > index.html
+            chown -R www-data:www-data /var/www/
+
+
+  EIPAZ1:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref AWSInstaceAZ1
+
+  AWSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: EC2 Security Group
+      VpcId: !Ref VpcId
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '80'
+        ToPort: '80'
+        CidrIp: 0.0.0.0/0
+      - IpProtocol: tcp
+        FromPort: '22'
+        ToPort: '22'
+        CidrIp: 24.13.205.85/32 #Restrict to your Public IP
+      SecurityGroupEgress:
+      - IpProtocol: "-1"
+        CidrIp: 0.0.0.0/0
+      Tags:
+      - Key: Name
+        Value: EC2 SG
+
+# Outputs:
+#   ClientPrefix:
+#     Description: Client Prefix
+#     Value: !Ref ClientPrefix
+#     Export:
+#       Name: !Sub "${AWS::StackName}-ClientPrefix"
