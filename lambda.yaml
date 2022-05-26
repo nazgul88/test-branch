@@ -1,0 +1,359 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Update Launch Template cloudformation.
+
+Parameters:
+  LambdaRuntime:
+    Description: The Lambda runtime to use
+    Type: String
+    AllowedValues:
+      - python3.7
+      - python3.6
+    Default: python3.7
+
+  Site:
+    Description: "Name of the site, Ex: agweb"
+    Type: String
+
+  EnvironmentName:
+    Description: " Drop in the value from the EnvironmentName variable, Ex: Stage"
+    Type: String
+
+  TemplateLaunchID:
+    Description: "Get Launch template id which needs to be updated, Ex: lt-0f57e289d6492"
+    Type: String
+
+  LaunchTempateSourceVersion:
+    Description: "Get Launch template source VersionNumber Ex: 2"
+    Type: String
+    AllowedPattern: ^[0-9]*$
+  
+  ASGName:
+    Description: "Autoscaling group name"
+    Type: String
+
+  UpdateAmiName:
+    Description: "Name of AMI, Ex: fjawsagweb01-stage"
+    Type: String
+
+  InstanceIdForAMI:
+    Description: "Get Instance ID for AMI, Ex: i-0258543022d96"
+    Type: String
+
+Resources:
+  UpdateLaunchTemplate:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Join ['', ['SCTG-AutoScaleAMIUpdater-', !Ref Site, '-', !Ref EnvironmentName ]]
+      Code:
+        ZipFile: |
+                #!/usr/bin/env python
+                import boto3
+                import sys, os, time
+
+                from dateutil import parser
+                import datetime
+
+
+                def lambda_handler(event, context):
+
+                    client = boto3.client('ec2')
+                    ami_name = os.environ['ami_name_var']
+                    LaunchTemplateId = os.environ['LaunchTempID']
+                    sourceVersion = os.environ['source_version']
+                    age = 90
+
+                    def newest_image(list_of_ami):
+                        list_of_images = []
+                        for imageinfo in list_of_ami:
+                            # ami_name variable should be added
+                            if ami_name in  imageinfo['Name']:
+                                list_of_images.append(imageinfo)
+                            #if 'Tags' in imageinfo:
+                                #imagename = [(id.get("Value")) for id in imageinfo['Tags'] if id.get("Key") == "Name" ]
+                                #print(imagename)
+                                # if "mrtawsweb01-stage16" in  imagename[0]:
+                                #     list_of_images.append(imageinfo)
+                        latest = None
+                        for image in list_of_images:
+                            if not latest:
+                                latest = image
+                                continue
+                            if parser.parse(image['CreationDate']) > parser.parse(latest['CreationDate']):
+                                latest = image
+                        return latest
+
+
+                    def create_NewLaunch_template(TemplateID, AmiId):
+                        description = "Updating with new AMI: " + AmiId
+                        print(description)
+                        newlaunchversion = client.create_launch_template_version(
+                            DryRun=False,
+                            LaunchTemplateId=TemplateID,
+                            SourceVersion=sourceVersion,
+                            VersionDescription= description,
+                            LaunchTemplateData={
+                                'ImageId': AmiId
+                            }
+                        )
+                        return newlaunchversion
+
+
+                    def modify_launch_template(template_id, def_version):
+                        def_version = str(def_version)
+                        response = client.modify_launch_template(
+                            DryRun=False,
+                            LaunchTemplateId= template_id,
+                            DefaultVersion= def_version
+                        )
+                        return response
+
+
+                    def days_old(date):
+                        get_date_obj = parser.parse(date)
+                        date_obj = get_date_obj.replace(tzinfo=None)
+                        diff = datetime.datetime.now() - date_obj
+                        return diff.days
+
+
+                    def remove_old_ami(ami_list):
+                        print("==== Let's remove old AMI's =====")
+                        for ami in ami_list:
+                            create_date = ami["CreationDate"]
+                            ami_id_to_delete = ami['ImageId']
+                            day_old = days_old(create_date)
+                            if day_old > age and ami_name in ami['Name']:
+                                print("Removing " + ami_id_to_delete + " Days:")
+                                print(day_old)
+                                client.deregister_image(ImageId=ami_id_to_delete)
+
+
+                    response = client.describe_images(Owners=['self'])
+                    list = response['Images']
+                    source_image = newest_image(list)
+                    print("=======Most newest image========")
+                    print(source_image)
+                    ami_id = source_image['ImageId']
+                    newversion = create_NewLaunch_template(LaunchTemplateId, ami_id)['LaunchTemplateVersion']['VersionNumber']
+                    modify_launch_template(LaunchTemplateId, newversion)
+                    remove_old_ami(list)
+
+                    # Scale down and up to replace instances
+                    ascale = boto3.client("autoscaling")
+                    ascale_name = os.environ['asg_name']
+                    response = ascale.start_instance_refresh(
+                        AutoScalingGroupName = ascale_name,
+                        Strategy='Rolling',
+                        Preferences={
+                            'MinHealthyPercentage': 50,
+                            'InstanceWarmup': 180,
+                        },
+
+                    )
+                    return response
+
+
+
+      Handler: index.lambda_handler
+      Runtime: !Ref 'LambdaRuntime'
+      MemorySize: 256
+      Timeout: 150
+      Role: !GetAtt 'LambdaUpdateLaunchTemplateRole.Arn'
+      Environment:
+        Variables:
+          LaunchTempID: !Ref 'TemplateLaunchID'
+          ami_name_var: !Ref 'UpdateAmiName'
+          source_version: !Ref 'LaunchTempateSourceVersion'
+          asg_name: !Ref 'ASGName'
+      Tags:
+        - Key: ENV
+          Value: !Ref 'EnvironmentName'
+      ReservedConcurrentExecutions: 2
+
+  LambdaUpdateLaunchTemplateRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: lambda-execution-role
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeImages
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - "ec2:DescribeInstances"
+                  - "ec2:DescribeSnapshots"
+                  - "ec2:DescribeExportImageTasks"
+                  - "ec2:CreateTags"
+                  - "ec2:DescribeImageAttribute"
+                  - "ec2:DescribeSubnets"
+                  - "ec2:ExportImage"
+                  - "ec2:ModifyImageAttribute"
+                  - "ec2:DescribeAvailabilityZones"
+                  - "ec2:DescribeVpcs"
+                  - "ec2:CreateImage"
+                  - "ec2:CopyImage"
+                  - "ec2:GetLaunchTemplateData"
+                  - "ec2:ImportImage"
+                  - "ec2:ResetImageAttribute"
+                  - "ec2:DescribeLaunchTemplates"
+                  - "ec2:RegisterImage"
+                  - "ec2:DescribeInstanceTypes"
+                  - "ec2:DeregisterImage"
+                  - "ec2:DeleteTags"
+                  - "ec2:DeleteFpgaImage"
+                  - "ec2:DescribeTags"
+                  - "ec2:DescribeLaunchTemplateVersions"
+                  - "ec2:DescribeImportImageTasks"
+                  - "ec2:CopyFpgaImage"
+                  - "ec2:CreateLaunchTemplateVersion"
+                  - "ec2:DescribeImages"
+                  - "ec2:CreateFpgaImage"
+                  - "ec2:ModifyLaunchTemplate"
+                  - "ec2:ResetFpgaImageAttribute"
+                  - "autoscaling:DescribeAutoScalingGroups"
+                  - "autoscaling:UpdateAutoScalingGroup"
+                  - "autoscaling:StartInstanceRefresh"
+                Resource: '*'
+
+  TriggerUpdateLaunchTemplateLambda:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Triggers Launch Template Lambda Function
+      Name: !Join ['', ['SCTG-TriggerAutoScaleAMIUpdater-', !Ref Site, '-', !Ref EnvironmentName ]]
+      ScheduleExpression: "cron(30 12 1 * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn:
+            Fn::GetAtt:
+              - "UpdateLaunchTemplate"
+              - "Arn"
+          Id: "UpdateLaunchTemplate"
+
+  PermissionForEventsToInvokeLaunchTemp:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref UpdateLaunchTemplate
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt TriggerUpdateLaunchTemplateLambda.Arn
+
+
+
+  CreateAmi:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Join ['', ['SCTG-AutoScaleCreateAmi-', !Ref Site, '-', !Ref EnvironmentName ]]
+      Code:
+        ZipFile: |
+                import json
+                import json
+                import boto3, os
+                def lambda_handler(event, context):
+                    instanceid = os.environ['InstanceIdForAMI']
+                    UpdateAmiName = os.environ['UpdateAmiName']
+                    client = boto3.client('ec2')
+                    UpdateAmiName = UpdateAmiName + "-" + str(context.aws_request_id)
+                    print(UpdateAmiName)
+                    response = client.create_image(
+                        Description='ami for client',
+                        DryRun=False,
+                        InstanceId = instanceid,
+                        Name = UpdateAmiName,
+                        NoReboot=True
+                    )
+                    return response
+
+      Handler: index.lambda_handler
+      Runtime: !Ref 'LambdaRuntime'
+      MemorySize: 128
+      Timeout: 60
+      Role: !GetAtt 'LambdaCreateAmiRole.Arn'
+      Environment:
+        Variables:
+          InstanceIdForAMI: !Ref 'InstanceIdForAMI'
+          UpdateAmiName: !Ref 'UpdateAmiName'
+      Tags:
+        - Key: ENV
+          Value: !Ref 'EnvironmentName'
+      ReservedConcurrentExecutions: 2
+
+
+  LambdaCreateAmiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: lambda-execution-role
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: arn:aws:logs:*:*:*
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                  - "ec2:*"
+                  - "cloudwatch:*"
+                  - "aws-marketplace:*"
+                  - "iam:GetRole"
+                  - "iam:GetInstanceProfile"
+                  - "s3:GetObject"
+                  - "s3:ListBucket"
+                  - "ec2:CreateTags"
+                  - "sns:Publish"
+                Resource: '*'
+
+
+  TriggerCreateAmiLambda:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: !Join ['', ['Creates AMI for Launch Template, ', !Ref UpdateAmiName ]]
+      Name: !Join ['', ['SCTG-AutoScaleCreateAmiLambda-', !Ref Site, '-', !Ref EnvironmentName ]]
+      ScheduleExpression: "cron(0 11 1 * ? *)"
+      State: ENABLED
+      Targets:
+        - Arn:
+            Fn::GetAtt:
+              - "CreateAmi"
+              - "Arn"
+          Id: "CreateAmi"
+
+  PermissionForEventsToInvokeCreateAMI:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref CreateAmi
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt TriggerCreateAmiLambda.Arn
