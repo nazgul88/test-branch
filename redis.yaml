@@ -1,0 +1,190 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: "This stack will contain configurations for the ElastiCache service Redis or Memcached."
+
+Parameters: 
+
+  ClusterEngine:
+    Type: "String"
+    Description: "The Type of ElastiCache engine to use (Redis or Memcached)"
+    Default: "redis"
+    AllowedValues:
+      - memcached
+      - redis
+
+  NodeType:
+    Type: "String"
+    Description: "The node instance size for your cluster."
+    Default: "cache.t3.micro"
+    AllowedValues:
+      - cache.m5.large
+      - cache.m5.xlarge
+      - cache.m5.2xlarge
+      - cache.m5.4xlarge
+      - cache.m4.large
+      - cache.m4.xlarge
+      - cache.m4.2xlarge
+      - cache.m4.4xlarge
+      - cache.t3.micro
+      - cache.t3.small
+      - cache.t3.medium
+      - cache.r5.large
+      - cache.r5.xlarge
+      - cache.r5.2xlarge
+      - cache.r5.4xlarge
+      - cache.r4.large
+      - cache.r4.xlarge
+      - cache.r4.2xlarge
+      - cache.r4.4xlarge
+
+  EnvironmentType:
+    Type: "String"
+    AllowedValues:
+      - dev
+      - stage
+      - prod
+
+  # MemcachedEngineVersion:
+  #   Type: "String"
+  #   Description: "The engine version to use for the Memcached cluster."
+  #   Default: "1.4.33"
+  #   AllowedValues:
+  #     - 1.5.16
+  #     - 1.5.10
+  #     - 1.4.34
+  #     - 1.4.33
+  #     - 1.4.24
+  #     - 1.4.14
+  #     - 1.4.5
+
+  RedisEngineVersion:
+    Type: "String"
+    Description: "The engine version to use for the Redis cluster."
+    Default: "5.0.6"
+    AllowedValues:
+      - 5.0.6
+      - 5.0.5
+      - 5.0.4
+      - 5.0.0
+      - 3.2.10
+      - 3.2.4
+      - 2.8.23
+      - 2.8.21
+      - 2.8.6
+      - 2.6.13
+
+  NumberOfNodes:
+    Type: "Number"
+    Description: "The amount of cache nodes the ElastiCache cluster should have. If you would like multi-az, then the number must be greater than 1."
+    MinValue: 1
+    Default: 1 
+
+  ECPort:
+    Type: "Number"
+    Description: "The port the ElastiCache cluster should listen on."
+    Default: 6379
+
+  MaintenanceWindowRange:
+    Type: "String"
+    Description: "The preferred maintenance window for your cluster. It is specified as a range in the format ddd:hh24:mi-ddd:hh24:mi (24H Clock UTC). The minimum maintenance window is a 60 minute period. Valid values for ddd are: sun, mon, tue, wed, thu, fri, sat"      
+    Default: "tue:09:00-tue:10:00"
+
+  # AZDeploymentType:
+  #   Type: "String"
+  #   Description: "Specify whether to deploy your cluster across multiple Availability Zones or a single Availability Zone."
+  #   AllowedValues:
+  #     - single
+  #     - across
+
+# Conditions: 
+#   EnableMultiAZ:
+#     !Equals [!Ref AZDeploymentType, "across"]
+#   MultipleNodes:
+#     !Not [!Equals [!Ref NumberOfNodes, 1]] 
+  
+
+Resources: 
+
+  ECSecurityGroup:
+    Type: "AWS::EC2::SecurityGroup"
+    Properties:
+      GroupDescription: "Allow all ElastiCache traffic from resources associated with this security group"
+      GroupName: !Join ['', [Ref: ClusterEngine, '-SG']]
+      VpcId: !ImportValue VPC 
+  
+  ECSecurityGroupIngress:
+    Type: "AWS::EC2::SecurityGroupIngress"
+    DependsOn:
+      - ECSecurityGroup
+    Properties:
+      IpProtocol: "tcp"
+      GroupId: !Ref ECSecurityGroup
+      FromPort: !Ref ECPort
+      ToPort: !Ref ECPort
+      SourceSecurityGroupId: !Ref ECSecurityGroup
+    
+
+  ECSubnetGroup:
+    Type: "AWS::ElastiCache::SubnetGroup"
+    Properties:
+      CacheSubnetGroupName: !Sub ${ClusterEngine}-${EnvironmentType}
+      Description: "The private database subnets are associated with this subnet group."
+      SubnetIds:
+        - !ImportValue SCTG-VPC-Private-DB-Subnet-AZ1
+        - !ImportValue SCTG-VPC-Private-DB-Subnet-AZ2
+
+  MyECCluster:
+    Type: "AWS::ElastiCache::CacheCluster"
+    Properties:
+      # AZMode: !If [EnableMultiAZ, "cross-az", "single-az"]
+      CacheNodeType: !Ref NodeType
+      CacheSubnetGroupName: !Ref ECSubnetGroup
+      ClusterName: !Sub ${ClusterEngine}-${EnvironmentType}
+      Engine: !Ref ClusterEngine
+      EngineVersion: !Ref RedisEngineVersion
+      # EngineVersion: !Ref MemcachedEngineVersion
+      NumCacheNodes: !Ref NumberOfNodes
+      Port: !Ref ECPort
+      # PreferredAvailabilityZone: 
+      #   !If
+      #     - MultipleNodes
+      #     - !Ref AWS::NoValue
+      #     - !Sub ${AWS::Region}a
+      # PreferredAvailabilityZones:
+      #   !If
+      #     - MultipleNodes
+      #     - - !Sub ${AWS::Region}a
+      #       - !Sub ${AWS::Region}b
+      #     - !Ref AWS::NoValue
+      PreferredMaintenanceWindow: !Ref MaintenanceWindowRange
+      VpcSecurityGroupIds:
+        - !Ref ECSecurityGroup
+
+Outputs:
+
+  ECSecurityGroup:
+    Description: "The resource ID of the security group for communication to ElastiCache"
+    Value: !Ref ECSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-EC-SG"
+
+  ECName:
+    Description: "The name of the ElastiCache cluster"
+    Value: !Ref MyECCluster
+    Export:
+      Name: !Sub "${AWS::StackName}-ECName"
+  
+  ECPort:
+    Description: "The port of the ElastiCache cluster"
+    Value: !Ref ECPort
+    Export:
+      Name: !Sub "${AWS::StackName}-ECPort"
+  
+  ECEndpoint:
+    Description: "The endpoint of the ElastiCache cluster"
+    # Value: !GetAtt MyECCluster.ConfigurationEndpoint.Address
+    Value: !GetAtt MyECCluster.RedisEndpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-ECEndpoint"
+
+
+
